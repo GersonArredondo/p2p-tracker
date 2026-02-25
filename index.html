@@ -70,7 +70,7 @@ body { font-family:var(--font); color:var(--label); max-width:430px; margin:0 au
   background:var(--bg); flex-shrink:0; }
 
 /* ── SCROLL CONTENT ── */
-.content { flex:1; overflow-y:auto; padding:0 0 90px; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+.content { flex:1; overflow-y:auto; padding:0 0 80px; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
 .content::-webkit-scrollbar { display:none; }
 
 /* ── APPLE TABLE GROUPS ── */
@@ -130,10 +130,7 @@ body { font-family:var(--font); color:var(--label); max-width:430px; margin:0 au
 .venta-note.hidden { display:none; }
 
 /* ── SUBMIT BUTTON ── */
-.submit-wrap { position:fixed; bottom:0; left:50%; transform:translateX(-50%);
-  width:100%; max-width:430px;
-  padding:12px 16px max(20px,env(safe-area-inset-bottom));
-  background:linear-gradient(transparent, var(--bg) 30%); z-index:50; }
+.submit-wrap { padding:24px 16px 12px; }
 .submit-btn { width:100%; background:var(--blue); color:white; border:none;
   border-radius:var(--radius-lg); padding:16px; font-size:17px; font-weight:600;
   font-family:var(--font); cursor:pointer; letter-spacing:-.2px;
@@ -326,11 +323,12 @@ body { font-family:var(--font); color:var(--label); max-width:430px; margin:0 au
       <div class="venta-note-text">En ventas solo se registra el titular del Exchange.</div>
     </div>
 
-  </div>
+    <!-- Botón guardar dentro del scroll -->
+    <div class="submit-wrap">
+      <button class="submit-btn" id="submit-btn" onclick="submitOrder()">Guardar</button>
+    </div>
 
-  <div class="submit-wrap">
-    <button class="submit-btn" id="submit-btn" onclick="submitOrder()">Guardar</button>
-  </div>
+  </div><!-- end form-content -->
 
   <div class="tabbar">
     <div class="tab active" onclick="goTo('sc-nueva','tab-nueva')">
