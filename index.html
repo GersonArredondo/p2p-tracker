@@ -193,6 +193,15 @@ body { font-family:var(--font); color:var(--label); max-width:430px; margin:0 au
 .empty-icon { font-size:44px; opacity:.25; }
 .empty-title { font-size:17px; font-weight:600; color:var(--label2); }
 .empty-sub { font-size:15px; color:var(--gray); text-align:center; line-height:1.5; }
+
+/* ── DRAG & DROP ── */
+.order-row.dragging { opacity:.5; background:var(--gray5); }
+.order-row.drag-over { border-top:2px solid var(--blue); }
+.drag-handle { font-size:16px; color:var(--gray3); margin-right:4px; cursor:grab; flex-shrink:0; touch-action:none; user-select:none; }
+.drag-ghost { position:fixed; pointer-events:none; z-index:9999; opacity:.9;
+  background:var(--bg2); border-radius:var(--radius); box-shadow:0 8px 24px rgba(0,0,0,.18);
+  padding:12px 16px; display:flex; align-items:center; gap:12px;
+  left:0; top:0; width:calc(100% - 32px); max-width:398px; }
 </style>
 </head>
 <body>
@@ -466,7 +475,7 @@ const CONFIG_KEY = 'p2p_v5_config';
 
 const ST = {
   tipo:'COMPRA', exchDoc:'', tercDoc:'', hasTercero:false,
-  editingId:null, editExchDoc:'', editTercDoc:''
+  editingId:null, editExchDoc:'', editTercDoc:'', editTipo:'COMPRA'
 };
 
 function getOrders() {
@@ -620,12 +629,15 @@ function renderList(orders) {
       <div class="empty-sub">Las órdenes que registres aparecerán aquí.</div></div>`;
     return;
   }
-  el.innerHTML = orders.map(orderRowHTML).join('');
+  el.innerHTML = orders.map(o => orderRowHTML(o, true)).join('');
+  initDragDrop(el);
 }
 
-function orderRowHTML(o) {
+function orderRowHTML(o, draggable=false) {
   const isC = o.tipo === 'COMPRA';
-  return `<div class="order-row" onclick="openEdit(${o.id})">
+  const handle = draggable ? `<div class="drag-handle" data-drag-handle>⠿</div>` : '';
+  return `<div class="order-row" data-id="${o.id}" onclick="handleRowClick(event,${o.id})">
+    ${handle}
     <div class="order-dot ${isC?'c':'v'}"></div>
     <div class="order-main">
       <div class="order-name">${o.exchNombre}</div>
@@ -659,7 +671,138 @@ function renderSearchResults(orders) {
       <div class="empty-title">Sin resultados</div></div>`;
     return;
   }
-  el.innerHTML = orders.map(orderRowHTML).join('');
+  el.innerHTML = orders.map(o => orderRowHTML(o, false)).join('');
+}
+
+// Click on row — ignore if coming from drag handle
+function handleRowClick(e, id) {
+  if (e.target.closest('[data-drag-handle]')) return;
+  openEdit(id);
+}
+
+// ── DRAG & DROP ──
+function initDragDrop(container) {
+  let dragEl = null, ghost = null, startY = 0, offsetY = 0;
+  let holdTimer = null, dragging = false;
+
+  const rows = () => [...container.querySelectorAll('.order-row')];
+
+  function getRowAt(y) {
+    return rows().find(r => {
+      const rect = r.getBoundingClientRect();
+      return y >= rect.top && y <= rect.bottom;
+    });
+  }
+
+  function createGhost(el) {
+    const g = el.cloneNode(true);
+    g.className = 'drag-ghost';
+    g.style.width = el.offsetWidth + 'px';
+    document.body.appendChild(g);
+    return g;
+  }
+
+  function startDrag(el, clientY) {
+    dragging = true;
+    dragEl = el;
+    dragEl.classList.add('dragging');
+    const rect = dragEl.getBoundingClientRect();
+    offsetY = clientY - rect.top;
+    ghost = createGhost(dragEl);
+    moveGhost(clientY);
+  }
+
+  function moveGhost(clientY) {
+    if (!ghost) return;
+    const containerRect = container.closest('.screen')?.getBoundingClientRect() || {left:0};
+    ghost.style.transform = `translate(${containerRect.left + 16}px, ${clientY - offsetY}px)`;
+  }
+
+  function endDrag(clientY) {
+    if (!dragging || !dragEl) return;
+    dragging = false;
+    if (ghost) { ghost.remove(); ghost = null; }
+    dragEl.classList.remove('dragging');
+    container.querySelectorAll('.order-row').forEach(r => r.classList.remove('drag-over'));
+
+    const target = getRowAt(clientY);
+    if (target && target !== dragEl) {
+      const allRows = rows();
+      const fromIdx = allRows.indexOf(dragEl);
+      const toIdx   = allRows.indexOf(target);
+
+      // Re-order in DOM
+      if (fromIdx < toIdx) container.insertBefore(dragEl, target.nextSibling);
+      else container.insertBefore(dragEl, target);
+
+      // Re-order in storage
+      const orders = getOrders();
+      const newOrder = [...container.querySelectorAll('.order-row')]
+        .map(r => orders.find(o => o.id === Number(r.dataset.id)))
+        .filter(Boolean);
+      saveOrders(newOrder);
+
+      // Sync to Sheets
+      const cfg = getConfig();
+      if (cfg.scriptUrl) {
+        fetch(cfg.scriptUrl, {
+          method:'POST', mode:'no-cors',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({action:'reorder', ids: newOrder.map(o=>o.orden)})
+        }).catch(()=>{});
+      }
+      showToast('✓ Orden actualizada');
+    }
+    dragEl = null;
+  }
+
+  container.addEventListener('touchstart', e => {
+    const handle = e.target.closest('[data-drag-handle]');
+    if (!handle) return;
+    const row = handle.closest('.order-row');
+    if (!row) return;
+    startDrag(row, e.touches[0].clientY);
+  }, {passive:true});
+
+  container.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const cy = e.touches[0].clientY;
+    moveGhost(cy);
+    container.querySelectorAll('.order-row').forEach(r => r.classList.remove('drag-over'));
+    const over = getRowAt(cy);
+    if (over && over !== dragEl) over.classList.add('drag-over');
+  }, {passive:false});
+
+  container.addEventListener('touchend', e => {
+    if (!dragging) return;
+    endDrag(e.changedTouches[0].clientY);
+  });
+
+  // Mouse support (desktop preview)
+  container.addEventListener('mousedown', e => {
+    const handle = e.target.closest('[data-drag-handle]');
+    if (!handle) return;
+    const row = handle.closest('.order-row');
+    if (!row) return;
+    e.preventDefault();
+    startDrag(row, e.clientY);
+
+    const onMove = e2 => {
+      if (!dragging) return;
+      moveGhost(e2.clientY);
+      container.querySelectorAll('.order-row').forEach(r => r.classList.remove('drag-over'));
+      const over = getRowAt(e2.clientY);
+      if (over && over !== dragEl) over.classList.add('drag-over');
+    };
+    const onUp = e2 => {
+      endDrag(e2.clientY);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 // ── EDIT ──
@@ -669,6 +812,7 @@ function openEdit(id) {
   ST.editingId   = id;
   ST.editExchDoc = o.exchDocTipo;
   ST.editTercDoc = o.tercDocTipo || '';
+  ST.editTipo    = o.tipo;
 
   // Solo campos en el scroll — el botón guardar está FUERA (fijo abajo)
   document.getElementById('edit-scroll').innerHTML = `
@@ -680,13 +824,17 @@ function openEdit(id) {
           <div class="row-value">${escHtml(o.orden)}</div>
         </div>
         <div class="row">
-          <div class="row-label">Tipo</div>
-          <div class="row-value" style="color:${o.tipo==='COMPRA'?'var(--green)':'var(--red)'}">${o.tipo}</div>
-        </div>
-        <div class="row">
           <div class="row-label">Fecha</div>
           <div class="row-value">${o.fecha}</div>
         </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Tipo de operación</div>
+      <div class="segmented" style="margin:0">
+        <div class="seg-btn ${o.tipo==='COMPRA'?'active':''}" id="ef-seg-compra" onclick="setEditTipo('COMPRA')">📥 Compra</div>
+        <div class="seg-btn ${o.tipo==='VENTA'?'active':''}" id="ef-seg-venta" onclick="setEditTipo('VENTA')">📤 Venta</div>
       </div>
     </div>
 
@@ -707,7 +855,7 @@ function openEdit(id) {
       </div>
     </div>
 
-    ${o.tipo==='COMPRA' ? `
+    ${`<div id="ef-tipo-fields">` + (o.tipo==='COMPRA' ? `
     <div class="group">
       <div class="group-label">Tercero</div>
       <div class="table">
@@ -743,7 +891,7 @@ function openEdit(id) {
         </div>
       </div>
       <div class="group-footer">Cuenta a la que se envía el dinero (opcional).</div>
-    </div>`}
+    </div>`) + `</div>`}
   `;
 
   document.getElementById('edit-overlay').classList.remove('hidden');
@@ -767,17 +915,22 @@ function saveEdit() {
 
   const fechaOriginal = orders[idx].fecha; // Preservar fecha — nunca se modifica
 
+  orders[idx].tipo        = ST.editTipo;
   orders[idx].exchNombre  = document.getElementById('ef-exch-nombre')?.value.trim() || orders[idx].exchNombre;
   orders[idx].exchDocTipo = ST.editExchDoc;
   orders[idx].exchDocNum  = document.getElementById('ef-exch-doc')?.value.trim() || orders[idx].exchDocNum;
 
-  if (orders[idx].tipo === 'COMPRA') {
+  if (ST.editTipo === 'COMPRA') {
     orders[idx].tercNombre  = document.getElementById('ef-terc-nombre')?.value.trim() || '';
     orders[idx].tercDocTipo = ST.editTercDoc;
     orders[idx].tercDocNum  = document.getElementById('ef-terc-doc')?.value.trim() || '';
     orders[idx].hayTercero  = orders[idx].tercNombre ? 'Sí' : 'No';
     orders[idx].cuenta      = document.getElementById('ef-cuenta')?.value.trim() || '';
   } else {
+    orders[idx].tercNombre  = '';
+    orders[idx].tercDocTipo = '';
+    orders[idx].tercDocNum  = '';
+    orders[idx].hayTercero  = 'No';
     orders[idx].cuenta = document.getElementById('ef-cuenta-venta')?.value.trim() || '';
   }
 
@@ -820,6 +973,60 @@ function deleteOrderById(id) {
 function closeEdit() {
   document.getElementById('edit-overlay').classList.add('hidden');
   ST.editingId = null;
+}
+
+function setEditTipo(tipo) {
+  ST.editTipo = tipo;
+  document.getElementById('ef-seg-compra').classList.toggle('active', tipo === 'COMPRA');
+  document.getElementById('ef-seg-venta').classList.toggle('active', tipo === 'VENTA');
+
+  // Re-render the dynamic fields section
+  const fieldsDiv = document.getElementById('ef-tipo-fields');
+  if (!fieldsDiv) return;
+  const cuentaVal = document.getElementById('ef-cuenta')?.value || document.getElementById('ef-cuenta-venta')?.value || '';
+  const tercNombre = document.getElementById('ef-terc-nombre')?.value || '';
+  const tercDocNum = document.getElementById('ef-terc-doc')?.value || '';
+  const tercDocTipo = ST.editTercDoc || '';
+
+  if (tipo === 'COMPRA') {
+    fieldsDiv.innerHTML = `
+    <div class="group">
+      <div class="group-label">Tercero</div>
+      <div class="table">
+        <div class="row">
+          <input class="row-input" id="ef-terc-nombre" value="${escHtml(tercNombre)}" placeholder="Nombre (opcional)">
+        </div>
+        <div class="doc-row">
+          ${['CC','CE','PPT','SD'].map(t=>`
+            <div class="doc-btn ${tercDocTipo===t?'active':''}" onclick="editDocSel('terc','${t}',this)">${t}</div>
+          `).join('')}
+        </div>
+        <div class="row">
+          <input class="row-input" id="ef-terc-doc" value="${escHtml(tercDocNum)}" placeholder="N° documento (opcional)">
+        </div>
+      </div>
+    </div>
+    <div class="group">
+      <div class="group-label">Cuenta de destino</div>
+      <div class="table">
+        <div class="row">
+          <input class="row-input" id="ef-cuenta" value="${escHtml(cuentaVal)}" placeholder="Nequi, Daviplata, cuenta bancaria...">
+        </div>
+      </div>
+      <div class="group-footer">Cuenta a la que se envía el dinero (opcional).</div>
+    </div>`;
+  } else {
+    fieldsDiv.innerHTML = `
+    <div class="group">
+      <div class="group-label">Cuenta de destino</div>
+      <div class="table">
+        <div class="row">
+          <input class="row-input" id="ef-cuenta-venta" value="${escHtml(cuentaVal)}" placeholder="Nequi, Daviplata, cuenta bancaria...">
+        </div>
+      </div>
+      <div class="group-footer">Cuenta a la que se envía el dinero (opcional).</div>
+    </div>`;
+  }
 }
 
 // ── CONFIG ──
